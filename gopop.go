@@ -4,9 +4,16 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
+)
+
+var (
+	ErrDatabaseAlreadyExist = errors.New("database already exist")
+	ErrDatabaseNotFound     = errors.New("database not found")
 )
 
 type QueryReq struct {
@@ -18,6 +25,10 @@ type QueryReq struct {
 type CreateReq struct {
 	Name      string `json:"name"`
 	Migration string `json:"migration"`
+}
+
+type Message struct {
+	Msg string `json:"message"`
 }
 
 type Conn struct {
@@ -41,7 +52,7 @@ func auth(req *http.Request, c *Conn) {
 	req.Header.Set("Authorization", "Basic "+encodedCredentials)
 }
 
-func (c *Conn) Create(name string, migrationFile string) (*http.Response, error) {
+func (c *Conn) Create(name string, migrationFile string) (*Message, error) {
 	buffer, err := os.ReadFile(migrationFile)
 	if err != nil {
 		return nil, err
@@ -69,11 +80,22 @@ func (c *Conn) Create(name string, migrationFile string) (*http.Response, error)
 	if err != nil {
 		return nil, err
 	}
+	defer res.Body.Close()
+	body, _ := io.ReadAll(res.Body)
 
-	return res, nil
+	if res.StatusCode >= 400 {
+		if string(body) == "database already exist" {
+			return nil, ErrDatabaseAlreadyExist
+		}
+	}
+
+	message := new(Message)
+	json.Unmarshal(body, message)
+
+	return message, nil
 }
 
-func (c *Conn) Get(url string, name string) (*http.Response, error) {
+func (c *Conn) Get(url string, name string) (*Message, error) {
 	url = fmt.Sprintf(c.Url, "/v1/databases/?name=%s", name)
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
@@ -86,26 +108,39 @@ func (c *Conn) Get(url string, name string) (*http.Response, error) {
 	if err != nil {
 		return nil, err
 	}
-	return res, nil
+
+	defer res.Body.Close()
+	body, _ := io.ReadAll(res.Body)
+
+	if res.StatusCode >= 400 {
+		if string(body) == "database not found" {
+			return nil, ErrDatabaseNotFound
+		}
+	}
+
+	message := new(Message)
+	json.Unmarshal(body, message)
+
+	return message, nil
 }
 
-func (c *Conn) Drop(name string) (*http.Response, error) {
+func (c *Conn) Drop(name string) error {
 	url := fmt.Sprintf(c.Url, "/v1/databases/?name=%s", name)
 	req, err := http.NewRequest("DELETE", url, nil)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	auth(req, c)
-	res, err := c.Client.Do(req)
+	_, err = c.Client.Do(req)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	return res, nil
+	return nil
 }
 
-func (c *Conn) Query(name string, query string, args ...any) (*http.Response, error) {
+func (c *Conn) Query(name string, query string, args ...any) (*Message, error) {
 	msg := QueryReq{
 		Name:  name,
 		Query: query,
@@ -128,10 +163,22 @@ func (c *Conn) Query(name string, query string, args ...any) (*http.Response, er
 		return nil, err
 	}
 
-	return res, nil
+	defer res.Body.Close()
+	body, _ := io.ReadAll(res.Body)
+
+	if res.StatusCode >= 400 {
+		if string(body) == "database not found" {
+			return nil, ErrDatabaseNotFound
+		}
+	}
+
+	message := new(Message)
+	json.Unmarshal(body, message)
+
+	return message, nil
 }
 
-func (c *Conn) Exec(name string, query string, args ...any) (*http.Response, error) {
+func (c *Conn) Exec(name string, query string, args ...any) (*Message, error) {
 	msg := QueryReq{
 		Name:  name,
 		Query: query,
@@ -154,5 +201,17 @@ func (c *Conn) Exec(name string, query string, args ...any) (*http.Response, err
 		return nil, err
 	}
 
-	return res, nil
+	defer res.Body.Close()
+	body, _ := io.ReadAll(res.Body)
+
+	if res.StatusCode >= 400 {
+		if string(body) == "database not found" {
+			return nil, ErrDatabaseNotFound
+		}
+	}
+
+	message := new(Message)
+	json.Unmarshal(body, message)
+
+	return message, nil
 }
